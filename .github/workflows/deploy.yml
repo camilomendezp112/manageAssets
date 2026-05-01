@@ -1,0 +1,24 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Zip
+      run: zip -r function.zip .
+
+    - name: Deploy
+      uses: appleboy/lambda-action@v0.1.5
+      with:
+        aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws_secret_access_key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        region: us-east-1
+        function_name: mi-lambda
+        zip_file: function.zip
