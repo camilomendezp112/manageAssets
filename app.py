@@ -2,11 +2,21 @@ import json
 import os
 import uuid
 import boto3
+import sentry_sdk
+import os
 from datetime import datetime
 
 dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('TABLE_NAME')
 table = dynamodb.Table(TABLE_NAME)
+
+sentry_sdk.init(
+    dsn=os.environ["SENTRY_DSN"],
+    traces_sample_rate=1.0
+)
+
+sentry_sdk.set_tag("module", "manageAsset")
+sentry_sdk.set_tag("team", "grupo-3")
 
 def lambda_handler(event, context):
     try:
