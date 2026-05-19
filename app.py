@@ -20,6 +20,10 @@ sentry_sdk.set_tag("team", "grupo-3")
 
 def lambda_handler(event, context):
     try:
+
+         x = 1 / 0
+
+        
         claims = event.get('requestContext', {}).get('authorizer', {}).get('claims', {})
         if not claims:
             # Fallback for HTTP API structure just in case
