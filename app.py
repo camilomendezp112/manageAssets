@@ -52,7 +52,13 @@ def lambda_handler(event, context):
             }
 
     except Exception as e:
-        print(f"Error: {str(e)}")
+       sentry_sdk.capture_exception(e)
+
+        print(json.dumps({
+            "level": "error",
+            "message": str(e),
+            "module": "manageAsset"
+        }))
         return {
             'statusCode': 500,
             'body': json.dumps({'error': 'Internal server error'})
@@ -93,7 +99,16 @@ def handle_post(event, tenant_id):
         item['modelo'] = modelo
     
     table.put_item(Item=item)
-    
+
+    print(json.dumps({
+        "level": "INFO",
+        "module": "manageAsset",
+        "action": "create_asset",
+        "tenant_id": tenant_id,
+        "asset_id": asset_id,
+        "status": "success"
+    }))
+        
     return {
         'statusCode': 201,
         'body': json.dumps({'message': 'Asset created successfully', 'asset': item})
