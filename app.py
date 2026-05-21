@@ -2,21 +2,31 @@ import json
 import os
 import uuid
 import boto3
-import sentry_sdk
 from datetime import datetime
 from boto3.dynamodb.conditions import Key, Attr
+
+# Sentry is optional - if not installed in Lambda package, skip it gracefully
+try:
+    import sentry_sdk
+    sentry_sdk.init(
+        dsn=os.environ.get("SENTRY_DSN", ""),
+        traces_sample_rate=1.0
+    )
+    sentry_sdk.set_tag("module", "manageAsset")
+    sentry_sdk.set_tag("team", "grupo-3")
+    SENTRY_ENABLED = True
+except ImportError:
+    SENTRY_ENABLED = False
 
 dynamodb = boto3.resource('dynamodb')
 TABLE_NAME = os.environ.get('TABLE_NAME')
 table = dynamodb.Table(TABLE_NAME)
 
-sentry_sdk.init(
-    dsn=os.environ.get("SENTRY_DSN", ""),
-    traces_sample_rate=1.0
-)
 
-sentry_sdk.set_tag("module", "manageAsset")
-sentry_sdk.set_tag("team", "grupo-3")
+def capture_exception(e):
+    if SENTRY_ENABLED:
+        sentry_sdk.capture_exception(e)
+
 
 def make_response(success, code, data):
     return {
@@ -32,18 +42,19 @@ def make_response(success, code, data):
         }, default=str)
     }
 
+
 def lambda_handler(event, context):
     try:
         claims = event.get('requestContext', {}).get('authorizer', {}).get('claims', {})
         if not claims:
             claims = event.get('requestContext', {}).get('authorizer', {}).get('jwt', {}).get('claims', {})
         tenant_id = claims.get('custom:tenant_id') or claims.get('tenant_id')
-        
+
         if not tenant_id:
             return make_response(False, 403, {'error': 'Unauthorized: tenant_id not found in token'})
 
         http_method = event.get('httpMethod') or event.get('requestContext', {}).get('http', {}).get('method')
-        
+
         if http_method == 'POST':
             return handle_post(event, tenant_id)
         elif http_method == 'PUT':
@@ -54,9 +65,10 @@ def lambda_handler(event, context):
             return make_response(False, 405, {'error': f'Method {http_method} not allowed'})
 
     except Exception as e:
-        sentry_sdk.capture_exception(e)
+        capture_exception(e)
         print(f"Error: {str(e)}")
         return make_response(False, 500, {'error': 'Internal server error'})
+
 
 def handle_post(event, tenant_id):
     try:
@@ -76,8 +88,8 @@ def handle_post(event, tenant_id):
 
     try:
         stock = int(stock_val) if stock_val is not None else 0
-    except ValueError:
-        return make_response(False, 400, {'error': 'Stock must be an integer'})
+    except (ValueError, TypeError):
+        return make_response(False, 400, {'error': 'Stock must be a number'})
 
     # Check if a product with the same name already exists in this tenant
     response = table.query(
@@ -87,7 +99,7 @@ def handle_post(event, tenant_id):
     existing_items = response.get('Items', [])
 
     if existing_items:
-        # Product already exists! Update its stock by adding new stock
+        # Product already exists — sum the stock
         existing_item = existing_items[0]
         existing_id = existing_item.get('id_producto')
         existing_stock = int(existing_item.get('stock', 0))
@@ -118,7 +130,7 @@ def handle_post(event, tenant_id):
             }
         })
 
-    # Product does not exist. Create new product
+    # New product
     product_id = str(uuid.uuid4())
     created_at = datetime.utcnow().isoformat()
     reg_date = fecha_de_registro if fecha_de_registro else created_at
@@ -130,7 +142,7 @@ def handle_post(event, tenant_id):
         'nombre': nombre,
         'descripcion': descripcion,
         'tipo': tipo,
-        'type': tipo, # GSI compatibility
+        'type': tipo,  # GSI_Type compatibility
         'fecha_de_registro': reg_date,
         'stock': stock,
         'created_at': created_at,
@@ -148,20 +160,18 @@ def handle_post(event, tenant_id):
         "status": "success"
     }))
 
-    # Map output fields
-    producto = {
-        'id_producto': product_id,
-        'nombre': nombre,
-        'descripcion': descripcion,
-        'tipo': tipo,
-        'fecha_de_registro': reg_date,
-        'stock': stock
-    }
-
     return make_response(True, 201, {
         'message': 'Product created successfully',
-        'producto': producto
+        'producto': {
+            'id_producto': product_id,
+            'nombre': nombre,
+            'descripcion': descripcion,
+            'tipo': tipo,
+            'fecha_de_registro': reg_date,
+            'stock': stock
+        }
     })
+
 
 def handle_put(event, tenant_id):
     try:
@@ -175,7 +185,6 @@ def handle_put(event, tenant_id):
     if not id_producto:
         return make_response(False, 400, {'error': 'Missing required field: id_producto'})
 
-    # Fetch product to verify existence and check stock
     response = table.get_item(
         Key={
             'PK': f"TENANT#{tenant_id}",
@@ -190,12 +199,11 @@ def handle_put(event, tenant_id):
     current_stock = int(existing_item.get('stock', 0))
 
     if action:
-        # Operational Stock Change
         cant_val = data.get('cantidad') or data.get('stock')
         try:
             cantidad = int(cant_val) if cant_val is not None else 1
-        except ValueError:
-            return make_response(False, 400, {'error': 'Quantity/Stock must be an integer'})
+        except (ValueError, TypeError):
+            return make_response(False, 400, {'error': 'Quantity/Stock must be a number'})
 
         if action in ['buy', 'vender', 'sell']:
             if current_stock < cantidad:
@@ -208,7 +216,7 @@ def handle_put(event, tenant_id):
             nuevo_stock = current_stock + cantidad
             msg = f"Compra/Reabastecimiento registrado. Se sumaron {cantidad} unidades al producto '{existing_item.get('nombre')}'."
         else:
-            return make_response(False, 400, {'error': f"Acción '{action}' no válida"})
+            return make_response(False, 400, {'error': f"Accion '{action}' no valida"})
 
         updated_at = datetime.utcnow().isoformat()
         table.update_item(
@@ -235,7 +243,7 @@ def handle_put(event, tenant_id):
             }
         })
 
-    # Standard update
+    # Standard field update
     update_expr = []
     expr_attr_values = {}
     expr_attr_names = {}
@@ -247,15 +255,13 @@ def handle_put(event, tenant_id):
             if field == 'stock':
                 try:
                     val = int(val)
-                except ValueError:
-                    return make_response(False, 400, {'error': 'Stock must be an integer'})
-            
-            # Map 'tipo' to both 'tipo' and 'type' for GSI compatibility
+                except (ValueError, TypeError):
+                    return make_response(False, 400, {'error': 'Stock must be a number'})
+
             if field == 'tipo':
                 update_expr.append("#tipo = :tipo")
                 expr_attr_names["#tipo"] = "tipo"
                 expr_attr_values[":tipo"] = val
-                
                 update_expr.append("#type = :type")
                 expr_attr_names["#type"] = "type"
                 expr_attr_values[":type"] = val
@@ -300,6 +306,7 @@ def handle_put(event, tenant_id):
         })
     except dynamodb.meta.client.exceptions.ConditionalCheckFailedException:
         return make_response(False, 404, {'error': 'Producto no encontrado'})
+
 
 def handle_delete(event, tenant_id):
     try:
