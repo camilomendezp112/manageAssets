@@ -36,12 +36,11 @@ def capture_exception(e):
 def make_response(success, code, data):
     return {
         'statusCode': code,
-        'headers': {
-            'Content-Type': 'application/json',
-            'Access-Control-Allow-Origin': '*',
-            'Access-Control-Allow-Headers': '*',
-            'Access-Control-Allow-Methods': '*'
-        },
+       'headers': {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Methods': '*'
+    },
         'body': json.dumps({
             'success': success,
             'code': code,
@@ -85,7 +84,8 @@ def handle_upload(event):
     Generates a secure presigned PUT URL to upload product images directly to S3.
     """
     try:
-        body = json.loads(event.get('body', '{}'))
+        raw_body = json.loads(event.get('body', '{}'))
+        body = raw_body.get('data', raw_body)
     except Exception:
         return make_response(False, 400, {'error': 'Invalid JSON body'})
 
